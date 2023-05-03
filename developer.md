@@ -1,199 +1,115 @@
 # Developer setup
 
-## Getting started 
+Here, we show how to setup Armada for local development.
 
-There are many ways you can setup you local environment, this is just a basic quick example of how to setup everything you'll need to get started running and developing Armada.
+**Prerequisites:**
+* Golang >= 1.20 [https://golang.org/doc/install](https://golang.org/doc/install)
+* `kubectl` [https://kubernetes.io/docs/tasks/tools/install-kubectl/](https://kubernetes.io/docs/tasks/tools/install-kubectl/)
+* `mage` [https://magefile.org/](https://magefile.org/)
+* Docker installed and configured for the current user [https://docs.docker.com/engine/install/](https://docs.docker.com/engine/install/)
+* Dependencies and tooling installed via `make download`.
 
-### Pre-requisites
-To follow this section it is assumed you have:
-* Golang >= 1.16 installed [https://golang.org/doc/install](https://golang.org/doc/install)
-* `kubectl` installed [https://kubernetes.io/docs/tasks/tools/install-kubectl/](https://kubernetes.io/docs/tasks/tools/install-kubectl/)
-* Docker installed, configured for the current user
-* This repository cloned. The guide will assume you are in the root directory of this repository
+This guide assumes you have cloned this repository and are executing commands from its root directory.
 
-### Running Armada locally
+## Running Armada locally
 
-There are two options for developing Armada locally. 
+Armada schedules pods across Kubernetes clusters. Hence, for a local setup there needs to be at least one worker Kubernetes cluster available on the local machine, for which we use [kind](https://github.com/kubernetes-sigs/kind). Further, the Armada server, which is responsible for job submission and queuing, and an Armada executor must be running. The executor is responsible for interacting with the worker Kubernetes cluster.
 
-##### Kind
-You can use a [kind](https://github.com/kubernetes-sigs/kind) Kubernetes clusters.
- - The advantage of this is it is more like a real kubernetes cluster
- - However it is a bit more effort to set it up and it can only emulate a cluster with as much resource as your computer has
- 
-This is recommended if load doesn't matter or you are working on features that rely on integrating with kubernetes functionality
-  
-##### Fake-executor
-You can use fake-executor
+In addition, Armada relies on the following components for storage and communication:
 
- - It is easy to setup, as it is just a Go program that emulates a kubernetes cluster
- - It allows you emulate clusters much larger than your current machine
- - As the jobs aren't really running, it won't properly emulate a real kubernetes cluster
- 
-This is recommended when working on features that are purely Armada specific or if you want to get a high load of jobs running through Armada components 
+- Pulsar: used for passing messages between components.
+- Redis: the main database of Armada; used, e.g., to store queued jobs.
+- PostgreSQL: used for auxilliary storage. In the future, PostgreSQL will be the main database, instead of Redis.
 
-#### Setup Kind development
+All of these components can be started and initialised with `mage build ui localdev`
 
-1. Get kind (Installation help [here](https://kind.sigs.k8s.io/docs/user/quick-start/))
-    ```bash
-    GO111MODULE="on" go get sigs.k8s.io/kind@v0.11.1
-    ``` 
-2. Create kind clusters (you can create any number of clusters)
+Create a queue and run the Test Suite:
 
-    As this step is using Docker, it may require root to run
-    
-    ```bash
-    kind create cluster --name demo-a --config ./example/kind-config.yaml
-    kind create cluster --name demo-b --config ./example/kind-config.yaml
-    ```
-3. Start Redis
-    ```bash
-    docker run -d -p 6379:6379 redis
-    ```
-    
-    The following steps are shown in a terminal, but for development is it recommended they are run in your IDE
-
-4. Start server in one terminal
-    ```bash
-    go run ./cmd/armada/main.go --config ./e2e/setup/insecure-armada-auth-config.yaml
-    ```
-5. Start executor for demo-a in a new terminal
-    ```bash
-    ARMADA_APPLICATION_CLUSTERID=kind-demo-a ARMADA_METRIC_PORT=9001 go run ./cmd/executor/main.go
-    ```
-6. Start executor for demo-b in a new terminal
-    ```bash
-    ARMADA_APPLICATION_CLUSTERID=kind-demo-b ARMADA_METRIC_PORT=9002 go run ./cmd/executor/main.go
-    ```
-
-#### Setup Fake-executor development
-
-1. Start Redis
-    ```bash
-    docker run -d -p 6379:6379 redis
-    ```
-
-    The following steps are shown in a terminal, but for development is it recommended they are run in your IDE
-
-2. Start server in one terminal
-    ```bash
-    go run ./cmd/armada/main.go --config ./e2e/setup/insecure-armada-auth-config.yaml
-    ```
-3. Start executor for demo-a in a new terminal
-    ```bash
-    ARMADA_APPLICATION_CLUSTERID=demo-a ARMADA_METRIC_PORT=9001 go run ./cmd/fakeexecutor/main.go
-    ```
-4. Start executor for demo-b in a new terminal
-    ```bash
-    ARMADA_APPLICATION_CLUSTERID=demo-b ARMADA_METRIC_PORT=9002 go run ./cmd/fakeexecutor/main.go
-    ```
-
-#### Optional components
-
-##### NATS Streaming
-Armada can be set up to use NATS Streaming as message queue for events.
-To run NATS Streaming for development you can use docker:
 ```bash
-docker run -d -p 4223:4223 -p 8223:8223 nats-streaming -p 4223 -m 8223
+go run cmd/armadactl/main.go create queue e2e-test-queue
+
+# To allow Ingress tests to pass
+export ARMADA_EXECUTOR_INGRESS_URL="http://localhost"
+export ARMADA_EXECUTOR_INGRESS_PORT=5001
+
+go run cmd/testsuite/main.go test --tests "testsuite/testcases/basic/*" --junit junit.xml
 ```
 
-For Armada configuration check end to end test setup:
-```bash
-go run ./cmd/armada/main.go --config ./e2e/setup/insecure-armada-auth-config.yaml --config ./e2e/setup/nats/armada-config.yaml
-```
-
-##### Lookout - Armada UI
-Lookout requires Armada to be configured with NATS Streaming.
-To run Lookout, firstly build frontend:
-```bash
-cd ./internal/lookout/ui
-npm install
-npm run openapi
-npm run build
-```
-Start a Postgres database:
-```bash
-docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=psw postgres
-```
-Migrate database:
-```bash
-go run ./cmd/lookout/main.go --migrateDatabase
-```
-Then run go application:
-```bash
-go run ./cmd/lookout/main.go 
-```
-For UI development you can also use the React development server.
-Note that the Lookout API will still have to be running for this to work.
-```bash
-npm run start
-```
-
-#### Quick dev setup
-
-Optionally, you can get a `kind` cluster and redis, NATS and PostgreSQL containers up by running
-```bash
-./docs/dev/setup.sh
-```
-The script will print out commands to execute each of the three Armada components, `armada`, `armada-lookout`, and `armada-executor`.
-
-If you want to run Armada components using NATS Jetstream (as opposed to NATS streaming), you can run and copy the commands from the following command:
-```bash
-./docs/dev/setup.sh jetstream
-```
-
-When you're done, you can run
-```bash
-./docs/dev/teardown.sh
-```
-to tear down your development environment.
-
-#### Testing your setup
-
-1. Create queue & Submit job
-```bash
-go run ./cmd/armadactl/main.go create queue test --priorityFactor 1
-go run ./cmd/armadactl/main.go submit ./example/jobs.yaml
-go run ./cmd/armadactl/main.go watch test job-set-1
-```
-
-For more details on submitting jobs to Armada, see [here](https://github.com/G-Research/armada/blob/master/docs/user.md).
-
-Once you submit jobs, you should be able to see pods appearing in your cluster(s), running what you submitted.
-
+For more details on submitting jobs to Armada, see [the user guide](https://github.com/armadaproject/armada/blob/master/docs/user.md). Once you submit jobs, you should see pods appearing in your worker cluster(s).
 
 **Note:** Depending on your Docker setup you might need to load images for jobs you plan to run manually:
 ```bash
 kind load docker-image busybox:latest
 ```
 
-### Running tests
-For unit tests run
+Armada uses proto files extensively. Code-generation based on these files is run via `mage proto`.
+
+## Lookout - Armada web UI
+
+Armada bundles a web UI referred to as Lookout. Lookout requires PostgreSQL. Lookout is based on React and is built from [./localdev/run.sh](https://github.com/armadaproject/armada/blob/master/localdev/run.sh)
+
+Once completed, the Lookout UI should be accessible through your browser at `http://localhost:8089`
+
+For UI development, you can also use the React development server and skip the build step. Note that the Lookout API service will
+still have to be running for this to work. Browse to `http://localhost:3000` with this.
 ```bash
-make tests
+cd ./internal/lookout/ui
+yarn run start
 ```
 
-For end to end tests run:
+You can also get a production build of the UI by running `mage buildlookoutui` in the root of the repo.
+
+## Debugging
+
+The `localdev` environment can be started with debug servers for all
+Armada services. When started this way, you can connect to the debug
+servers using remote debugging configurations in your IDE, or by using
+the delve client (illustrated here). Note that the external ports are
+different for each service when remote debugging, but internal to the
+container, the port is always 4000.
+
 ```bash
-make tests-e2e
-# optionally stop kubernetes cluster which was started by test
-make e2e-stop-cluster
+$ localdev/run.sh debug
+starting debug compose environment
+[+] Building 0.1s (6/6) FINISHED
+$ docker exec -it server bash
+root@3b5e4089edbb:/app# dlv connect :4000
+Type 'help' for list of commands.
+(dlv) b (*SubmitServer).CreateQueue
+Breakpoint 3 set at 0x1fb3800 for github.com/armadaproject/armada/internal/armada/server.(*SubmitServer).CreateQueue() ./internal/armada/server/submit.go:137
+(dlv) c
+> github.com/armadaproject/armada/internal/armada/server.(*SubmitServer).CreateQueue() ./internal/armada/server/submit.go:140 (PC: 0x1fb38a0)
+   135: }
+   136:
+=> 137: func (server *SubmitServer) CreateQueue(ctx context.Context, request *api.Queue) (*types.Empty, error) {
+   138:         err := checkPermission(server.permissions, ctx, permissions.CreateQueue)
+   139:         var ep *ErrUnauthorized
+   140:         if errors.As(err, &ep) {
+   141:                 return nil, status.Errorf(codes.PermissionDenied, "[CreateQueue] error creating queue %s: %s", request.Name, ep)
+   142:         } else if err != nil {
+   143:                 return nil, status.Errorf(codes.Unavailable, "[CreateQueue] error checking permissions: %s", err)
+   144:         }
+   145:
+(dlv)
 ```
 
-## Code Generation
+External debug port mappings:
 
-This project uses code generation.
+|Armada service     |Debug host    |
+|-------------------|--------------|
+|Server             |localhost:4000|
+|Lookout            |localhost:4001|
+|Executor           |localhost:4002|
+|Binoculars         |localhost:4003|
+|Jobservice         |localhost:4004|
+|Lookout-ingester   |localhost:4005|
+|Lookout-ingesterv2 |localhost:4006|
+|Event-ingester     |localhost:4007|
+|Lookoutv2          |localhost:4008|
 
-The Armada api is defined using proto files which are used to generate Go source code (and the c# client) for our gRPC communication.
+## Usage metrics
 
-To generate source code from proto files:
-
-```
-make proto
-```
-
-### Usage metrics
-
-Some functionality the executor has is to report how much cpu/memory jobs are actually using.
+Some functionality the executor has is to report how much cpu/memory jobs are using.
 
 This is turned on by changing the executor config file to include:
 ``` yaml
@@ -203,7 +119,7 @@ metric:
 
 The metrics are calculated by getting values from metrics-server.
 
-When developing locally with Kind, you will also need to deploy metrics server to allow this to work.
+When developing locally with Kind, you will also need to deploy metrics-server to allow this to work.
 
 The simplest way to do this it to apply this to your kind cluster:
 
@@ -211,30 +127,44 @@ The simplest way to do this it to apply this to your kind cluster:
 kubectl apply -f https://gist.githubusercontent.com/hjacobs/69b6844ba8442fcbc2007da316499eb4/raw/5b8678ac5e11d6be45aa98ca40d17da70dcb974f/kind-metrics-server.yaml
 ```
 
-### Command-line tools
+### Setting up OIDC for developers.
 
-Our command-line tools used the cobra framework [https://github.com/spf13/cobra](https://github.com/spf13/cobra).
+Setting up OIDC can be an art.  The [Okta Developer Program](https://developer.okta.com/signup/) provides a nice to test OAuth flow.
 
-You can use the cobra cli to add new commands, the below will describe how to add new commands for `armadactl` but it can be applied to any of our command line tools.
+1) Create a Okta Developer Account
+    - I used my github account.
+2) Create a new App in the Okta UI.
+    - Select OIDC - OpenID Connect.
+    - Select Web Application.
+3) In grant type, make sure to select Client Credentials.  This has the advantage of requiring little interaction.
+4) Select 'Allow Everyone to Access'
+5) Deselect Federation Broker Mode.
+6) Click okay and generate a client secret.
+7) Navigate in the Okta settings to the API settings for your default authenticator.
+8) Select Audience to be your client id.
 
-##### Steps
 
-Get cobra cli tool:
+Setting up OIDC for Armada requires two separate configs (one for Armada server and one for the clients)
+
+You can add this to your armada server config.
+```
+ auth:
+    anonymousAuth: false
+    openIdAuth:
+      providerUrl: "https://OKTA_DEV_USERNAME.okta.com/oauth2/default"
+      groupsClaim: "groups"
+      clientId: "CLIENT_ID_FROM_UI"
+      scopes: []
+```
+
+For client credentials, you can use the following config for the executor and other clients.
 
 ```
-go get -u github.com/spf13/cobra/cobra
+  openIdClientCredentialsAuth:
+      providerUrl: "https://OKTA_DEV_USERNAME.okta.com/oauth2/default"
+    clientId: "CLIENT_ID_FROM_UI"
+    clientSecret: "CLIENT_SECRET"
+    scopes: []
 ```
 
-Change to the directory of the command-line tool you are working on:
-
-```
-cd ./cmd/armadactl
-```
-
-Use cobra to add new command:
-
-```
-cobra add commandName
-```
-
-You should see a new file appear under `./cmd/armadactl/cmd` with the name you specified in the command.
+If you want to interact with Armada, you will have to use one of our client APIs.  The armadactl is not setup to work with OIDC at this time.
